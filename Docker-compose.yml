@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  web: &web
+    build:
+      context: .
+      dockerfile: ./docker/application/Dockerfile
+    depends_on:
+      - redis
+      - db
+#    command: python manage.py runserver 8000
+    command: gunicorn core.wsgi:application -b 0.0.0.0:8000
+    volumes:
+      - .:/usr/src/application/
+      - staticfiles:/static/
+    expose:
+      - 8000
+#    ports:
+#      - 8084:8000
+    env_file:
+      - ./.env.dev
+    restart: on-failure
+    networks:
+      - webnet
+      - nginx_network
+
+  db:
+    image: postgres
+    container_name: db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=hello
+
+  nginx:
+    build: ./docker/nginx
+    container_name: nginx
+    volumes:
+      - staticfiles:/app/static/
+    ports:
+      - 80:80
+    depends_on:
+      - web
+    restart: on-failure
+    networks:
+      - nginx_network
+    healthcheck:
+      test: [ "CMD-SHELL", "ps ax", "|" ,"grep -v grep", "|" ,"grep nginx",  "||", "exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    container_name: redis
+    image: redis
+    restart: on-failure
+    networks:
+      - webnet
+    expose:
+      - 6379
+    volumes:
+      - redis:/var/lib/redis/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+
+  rabbitmq:
+    container_name: rabbitmq
+    image: rabbitmq:3-management-alpine
+    restart: on-failure
+    networks:
+      - webnet
+    expose:
+      - 4369
+      - 5671
+      - 5672
+      - 15672
+      - 25672
+    volumes:
+      - ~/.docker-conf/rabbitmq/data/:/var/lib/rabbitmq/
+      - ~/.docker-conf/rabbitmq/log/:/var/log/rabbitmq
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5672"]
+      interval: 5s
+      timeout: 15s
+      retries: 1
+
+  celery:
+    <<: *web
+    container_name: celery
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+    expose: []
+    ports: []
+    networks:
+      - webnet
+    environment:
+      C_FORCE_ROOT: "true"
+      CHECK_WEB: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "ps ax", "|", "grep -v grep", "|", "grep celery", "||", "exit 1"]
+      interval: 1m
+      timeout: 5s
+      retries: 2
+
+  mailhog:
+    container_name: mailhog
+    image: mailhog/mailhog:latest
+    command: [ "-smtp-bind-addr", "0.0.0.0:25" ]
+    user: root
+    restart: on-failure
+    networks:
+      - webnet
+      - nginx_network
+    expose:
+      - 25
+      - 8025
+    healthcheck:
+      test: [ "CMD", "echo", "|", "telnet", "127.0.0.1 25" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  webnet:
+  nginx_network:
+
+volumes:
+  rabbitmq_data:
+  redis:
+  postgres_data:
+  staticfiles:
+
